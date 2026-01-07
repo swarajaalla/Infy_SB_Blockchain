@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login Test</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #45a049; }
+        .error { color: red; margin: 10px 0; }
+        .success { color: green; margin: 10px 0; }
+        .log { background: #f8f8f8; padding: 10px; margin: 10px 0; border-left: 3px solid #2196F3; font-size: 12px; max-height: 400px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔐 Login Test</h2>
+        <p>Test your login credentials</p>
+        
+        <form id="loginForm">
+            <input type="email" id="email" placeholder="Email" value="test@example.com" required>
+            <input type="password" id="password" placeholder="Password" value="test123" required>
+            <button type="submit">Login</button>
+        </form>
+        
+        <div id="message"></div>
+        <div id="log" class="log"></div>
+    </div>
+
+    <script>
+        const log = (msg) => {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${time}] ${msg}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(msg);
+        };
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const messageDiv = document.getElementById('message');
+            
+            log('🔄 Starting login process...');
+            log(`Email: ${email}`);
+            
+            try {
+                log('📡 Sending request to http://localhost:8000/auth/login');
+                
+                const response = await fetch('http://localhost:8000/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                log(`📥 Response status: ${response.status}`);
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    log(`❌ Error: ${JSON.stringify(error)}`);
+                    messageDiv.innerHTML = `<div class="error">❌ ${error.detail || 'Login failed'}</div>`;
+                    return;
+                }
+                
+                const data = await response.json();
+                log('✅ Response received');
+                log(`Token: ${data.access_token.substring(0, 30)}...`);
+                log(`User: ${JSON.stringify(data.user, null, 2)}`);
+                
+                // Store in localStorage
+                localStorage.setItem('token', data.access_token);
+                localStorage.setItem('user', JSON.stringify(data.user));
+                log('💾 Saved to localStorage');
+                
+                messageDiv.innerHTML = `
+                    <div class="success">
+                        ✅ Login successful!<br>
+                        User: ${data.user.name}<br>
+                        Role: ${data.user.role}<br>
+                        Org: ${data.user.org_name}
+                    </div>
+                `;
+                
+                log('✓ Login complete! Token and user saved.');
+                
+            } catch (error) {
+                log(`❌ Network error: ${error.message}`);
+                messageDiv.innerHTML = `<div class="error">❌ Network error: ${error.message}</div>`;
+            }
+        });
+        
+        log('Ready! Enter credentials and click Login');
+    </script>
+</body>
+</html>

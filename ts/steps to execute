@@ -1,5 +1,5 @@
 activate virtual env
-windows cmd  > .venv\Scripts\activate.bat
+windows cmd  > venv\Scripts\activate.bat
 powershell >  .venv\Scripts\Activate.ps1
 
 install requirements under backend/ : pip install -r requirements.txt

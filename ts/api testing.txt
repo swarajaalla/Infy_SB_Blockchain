@@ -1,85 +1,10 @@
-/auth/register
+
 {
-  "name": "John Doe",
-  "email": "john@example.com",
-  "password": "test123",
-  "role": "admin",
-  "org_name": "BankA"
-}
-
-POST /auth/login
-{
-  "email": "john@example.com",
-  "password": "test123"
-}
-use access token to authorise in swaggy ui 
-
-GET /users/me → Execute -> 200 response
-
-GET /users  -> Execute (only admins get users details)
-
-POST /documents
- create_doc
-{
-  "doc_type": "LOC",
-  "doc_number": "LOC-001",
-  "file_url": "test.pdf",
-  "hash": "abc123",
-  "issued_at": "2024-01-01T00:00:00"
-}
-
-
-GET /documents
-list_doc
-Corporate user → sees only own org docs
-Auditor → sees all docs
-
-
-TESTCASE SET: Org Scoping + Role Enforcement
-POST /auth/register
-{
-  "name": "UserA",
-  "email": "userA@test.com",
-  "password": "test123",
+  "name": "swaraj1",
+  "email": "swaraj1@example.com",
+  "password": "pass123",
   "role": "corporate",
-  "org_name": "OrgA"
-}
-POST /auth/register
-POST /auth/register
-{
-  "name": "UserB",
-  "email": "userB@test.com",
-  "password": "test123",
-  "role": "corporate",
-  "org_name": "OrgB"
-}
-POST /auth/register
-{
-  "name": "Auditor",
-  "email": "auditor@test.com",
-  "password": "test123",
-  "role": "auditor",
-  "org_name": "AuditOrg"
+  "org_name": "orgA"
 }
 
-login as user a and  create doc
-{
-  "doc_type": "LOC",
-  "doc_number": "A-LOC-001",
-  "file_url": "fileA.pdf",
-  "hash": "abc123"
-}
-
-login as userB and create_doc
-{
-  "doc_type": "LOC",
-  "doc_number": "B-LOC-001",
-  "file_url": "fileB.pdf",
-  "hash": "xyz987"
-}
-
-CHECK list_doc
-
-NOW TRY LOGIN AS AUDITOR AND CHECK access AND list_doc
-SHOULD GETT ACCESS TO ALL docs
 

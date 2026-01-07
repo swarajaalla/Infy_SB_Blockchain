@@ -1,0 +1,281 @@
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form, Request
+from sqlalchemy.orm import Session
+from app.core.dependencies import get_db, get_current_user
+from app.database import models, schemas
+from datetime import datetime
+
+from app.database.models import Document, LedgerEntry
+from app.utils.hashing import generate_sha256
+from app.core.s3 import upload_file_to_s3
+
+router = APIRouter()
+
+
+def create_ledger_entry(
+    db: Session,
+    document_id: int,
+    user_id: int,
+    event_type: str,
+    org_name: str,
+    description: str = None,
+    hash_after: str = None,
+    request: Request = None
+):
+    """Helper function to create ledger entries automatically"""
+    ip_address = request.client.host if request and request.client else None
+    user_agent = request.headers.get("user-agent", None) if request else None
+    
+    entry = LedgerEntry(
+        document_id=document_id,
+        user_id=user_id,
+        event_type=event_type,
+        description=description,
+        hash_after=hash_after,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        org_name=org_name
+    )
+    db.add(entry)
+    return entry
+
+@router.post("/", response_model=schemas.DocumentOut)
+def create_doc(
+    payload: schemas.DocumentCreate,
+    request: Request,
+    current=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create document metadata only (without file upload).
+    Note: Hash must be provided if document already exists elsewhere.
+    """
+    doc = models.Document(
+        owner_id=current["id"],
+        doc_type=payload.doc_type,
+        doc_number=payload.doc_number,
+        file_url=payload.file_url,
+        hash=payload.hash,
+        issued_at=payload.issued_at,
+        org_name=current["org_name"]
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    
+    # Create ledger entry
+    create_ledger_entry(
+        db=db,
+        document_id=doc.id,
+        user_id=current["id"],
+        event_type="CREATED",
+        org_name=current["org_name"],
+        description=f"Document metadata created: {payload.doc_type} - {payload.doc_number}",
+        hash_after=payload.hash,
+        request=request
+    )
+    db.commit()
+    
+    return doc
+
+@router.get("/")
+def list_docs(current=Depends(get_current_user), db: Session = Depends(get_db)):
+    if current["role"] == "auditor":
+        return db.query(models.Document).all()
+    return db.query(models.Document).filter(models.Document.org_name == current["org_name"]).all()
+
+@router.post("/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    doc_type: str = Form(...),
+    doc_number: str = Form(...),
+    issued_at: datetime = Form(...),
+    request: Request = None,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    """
+    Upload document file + automatically generate hash + save metadata.
+    This is the primary endpoint for document creation with file upload.
+    Returns the hash code which is required to access the document later.
+    """
+    file_bytes = await file.read()
+
+    # 1️⃣ Hash - Generate unique identifier
+    file_hash = generate_sha256(file_bytes)
+    
+    # Check if document with this hash already exists
+    existing_doc = db.query(Document).filter(Document.hash == file_hash).first()
+    if existing_doc:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Document with this hash already exists (ID: {existing_doc.id})"
+        )
+
+    # 2️⃣ Try to upload to S3, fallback to local storage
+    try:
+        file_url = upload_file_to_s3(file_bytes, file.filename)
+    except Exception as e:
+        # Fallback: Store locally if S3 not configured
+        import os
+        import uuid
+        upload_dir = "uploads"
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, f"{uuid.uuid4()}_{file.filename}")
+        with open(file_path, "wb") as f:
+            f.write(file_bytes)
+        file_url = f"local://{file_path}"
+
+    # 3️⃣ Save metadata
+    document = Document(
+        owner_id=current_user["id"],
+        doc_type=doc_type,
+        doc_number=doc_number,
+        file_url=file_url,
+        hash=file_hash,
+        issued_at=issued_at,
+        org_name=current_user["org_name"]
+    )
+
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    
+    # 4️⃣ Create ledger entry
+    create_ledger_entry(
+        db=db,
+        document_id=document.id,
+        user_id=current_user["id"],
+        event_type="UPLOADED",
+        org_name=current_user["org_name"],
+        description=f"Document uploaded: {file.filename} ({doc_type} - {doc_number})",
+        hash_after=file_hash,
+        request=request
+    )
+    db.commit()
+
+    return {
+        "message": "Document uploaded successfully",
+        "document_id": document.id,
+        "hash": file_hash,
+        "file_url": file_url,
+        "doc_type": doc_type,
+        "doc_number": doc_number
+    }
+
+
+@router.get("/hash/{hash_code}", response_model=schemas.DocumentOut)
+def get_document_by_hash(
+    hash_code: str,
+    request: Request,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve document metadata using hash code.
+    This is the secure way to access document information.
+    """
+    document = db.query(Document).filter(Document.hash == hash_code).first()
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found with provided hash")
+    
+    # Check access permissions
+    if current_user["role"] != "auditor":
+        if document.org_name != current_user["org_name"]:
+            raise HTTPException(status_code=403, detail="Not authorized to access this document")
+    
+    # Log access event
+    create_ledger_entry(
+        db=db,
+        document_id=document.id,
+        user_id=current_user["id"],
+        event_type="ACCESSED",
+        org_name=current_user["org_name"],
+        description=f"Document accessed via hash: {hash_code[:8]}...",
+        hash_after=hash_code,
+        request=request
+    )
+    db.commit(
+):
+    """
+    Retrieve document metadata using hash code.
+    This is the secure way to access document information.
+    """
+    document = db.query(Document).filter(Document.hash == hash_code).first()
+    
+    if not document:
+    request: Request = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    """
+    Verify if an uploaded file matches the stored hash.
+    Use this to check document integrity.
+    """
+    file_bytes = await file.read()
+    calculated_hash = generate_sha256(file_bytes)
+    
+    # If hash_code provided, check against it
+    if hash_code:
+        is_match = calculated_hash == hash_code
+        document = db.query(Document).filter(Document.hash == hash_code).first()
+        
+        # Log verification event if document exists
+        if document:
+            create_ledger_entry(
+                db=db,
+                document_id=document.id,
+                user_id=current_user["id"],
+                event_type="VERIFIED",
+                org_name=current_user["org_name"],
+                description=f"Document integrity verified: {'SUCCESS' if is_match else 'FAILED'}",
+                hash_after=calculated_hash,
+                request=request
+            )
+            db.commit()
+        
+        return {
+            "calculated_hash": calculated_hash,
+            "provided_hash": hash_code,
+            "is_verified": is_match,
+            "document_exists": document is not None,
+            "document_id": document.id if document else None
+        }
+    
+    # Otherwise, check if document exists in database
+    document = db.query(Document).filter(Document.hash == calculated_hash).first()
+    
+    # Log verification event if document exists
+    if document:
+        create_ledger_entry(
+            db=db,
+            document_id=document.id,
+            user_id=current_user["id"],
+            event_type="VERIFIED",
+            org_name=current_user["org_name"],
+            description="Document integrity verified via file upload",
+            hash_after=calculated_hash,
+            request=request
+        )
+        db.commi
+    if hash_code:
+        is_match = calculated_hash == hash_code
+        document = db.query(Document).filter(Document.hash == hash_code).first()
+        
+        return {
+            "calculated_hash": calculated_hash,
+            "provided_hash": hash_code,
+            "is_verified": is_match,
+            "document_exists": document is not None,
+            "document_id": document.id if document else None
+        }
+    
+    # Otherwise, check if document exists in database
+    document = db.query(Document).filter(Document.hash == calculated_hash).first()
+    
+    return {
+        "calculated_hash": calculated_hash,
+        "document_exists": document is not None,
+        "document_id": document.id if document else None,
+        "is_verified": document is not None
+    }

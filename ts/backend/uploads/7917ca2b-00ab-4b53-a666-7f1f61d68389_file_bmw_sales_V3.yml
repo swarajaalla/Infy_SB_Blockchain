@@ -1,0 +1,240 @@
+checks:
+
+# ============================================================
+# 1. CORE COMPLETENESS CHECKS
+# ============================================================
+
+- name: mandatory_fields_not_nul
+  criticality: error
+  check:
+    function: is_not_null_and_not_empty
+    for_each_column:
+      - Model
+      - Year
+      - Region
+      - Fuel_Type
+      - Transmission
+      - Engine_Size_L
+      - Mileage_KM
+      - Price_USD
+      - Sales_Volume
+      - Sales_Classification
+  user_metadata:
+    category: completeness
+    owner: data_eng_team
+
+# ============================================================
+# 2. DOMAIN / ENUMERATION CHECKS
+# ============================================================
+
+- name: valid_region
+  criticality: error
+  check:
+    function: is_in_list
+    arguments:
+      column: Region
+      allowed:
+        - Asia
+        - North America
+        - South America
+        - Europe
+        - Africa
+        - Middle East
+
+- name: valid_fuel_type
+  criticality: error
+  check:
+    function: is_in_list
+    arguments:
+      column: Fuel_Type
+      allowed:
+        - Petrol
+        - Diesel
+        - Electric
+        - Hybrid
+
+- name: valid_transmission
+  criticality: error
+  check:
+    function: is_in_list
+    arguments:
+      column: Transmission
+      allowed:
+        - Manual
+        - Automatic
+
+- name: valid_sales_classification
+  criticality: warn
+  check:
+    function: is_in_list
+    arguments:
+      column: Sales_Classification
+      allowed:
+        - High
+        - Low
+
+# ============================================================
+# 3. RANGE & NUMERIC SANITY CHECKS
+# ============================================================
+
+- name: year_reasonable_range
+  criticality: error
+  check:
+    function: is_in_range
+    arguments:
+      column: Year
+      min_limit: 2010
+      max_limit: 2025
+
+- name: engine_size_reasonable
+  criticality: warn
+  check:
+    function: is_in_range
+    arguments:
+      column: Engine_Size_L
+      min_limit: 1.0
+      max_limit: 5.0
+
+- name: mileage_reasonable
+  criticality: error
+  check:
+    function: is_in_range
+    arguments:
+      column: Mileage_KM
+      min_limit: 0
+      max_limit: 250000
+
+- name: price_reasonable
+  criticality: error
+  check:
+    function: is_in_range
+    arguments:
+      column: Price_USD
+      min_limit: 20000
+      max_limit: 150000
+
+- name: sales_volume_positive
+  criticality: error
+  check:
+    function: is_greater_than
+    arguments:
+      column: Sales_Volume
+      threshold: 0
+
+# ============================================================
+# 4. CONDITIONAL / BUSINESS RULE CHECKS
+# ============================================================
+
+- name: electric_cars_low_engine_size
+  criticality: warn
+  filter: Fuel_Type = 'Electric'
+  check:
+    function: is_less_than
+    arguments:
+      column: Engine_Size_L
+      threshold: 4.0
+
+- name: high_sales_should_have_high_volume
+  criticality: warn
+  filter: Sales_Classification = 'High'
+  check:
+    function: is_greater_than
+    arguments:
+      column: Sales_Volume
+      threshold: 5000
+
+# ============================================================
+# 5. UNIQUENESS / DUPLICATE DETECTION
+# ============================================================
+
+- name: composite_uniqueness_vehicle
+  criticality: error
+  check:
+    function: is_unique
+    arguments:
+      columns:
+        - Model
+        - Year
+        - Region
+        - Engine_Size_L
+
+# ============================================================
+# 6. AGGREGATE / DATASET-LEVEL CHECKS
+# ============================================================
+
+- name: minimum_record_count
+  criticality: error
+  check:
+    function: is_aggr_not_less_than
+    arguments:
+      column: Model
+      aggr_type: count
+      limit: 50
+
+- name: avg_price_not_too_low
+  criticality: warn
+  check:
+    function: is_aggr_not_less_than
+    arguments:
+      column: Price_USD
+      aggr_type: avg
+      limit: 40000
+
+- name: sales_volume_by_region
+  criticality: warn
+  check:
+    function: is_aggr_not_less_than
+    arguments:
+      column: Sales_Volume
+      aggr_type: sum
+      group_by:
+        - Region
+      limit: 5000
+
+# ============================================================
+# 7. DISTRIBUTION / SKEW CHECKS
+# ============================================================
+
+- name: mileage_distribution_not_extreme
+  criticality: warn
+  check:
+    function: is_aggr_not_greater_than
+    arguments:
+      column: Mileage_KM
+      aggr_type: stddev
+      limit: 100000
+
+# ============================================================
+# 8. SCHEMA STABILITY CHECK
+# ============================================================
+
+- name: expected_column_set
+  criticality: error
+  check:
+    function: column_count_and_names_check
+    arguments:
+      expected_columns:
+        - Model
+        - Year
+        - Region
+        - Color
+        - Fuel_Type
+        - Transmission
+        - Engine_Size_L
+        - Mileage_KM
+        - Price_USD
+        - Sales_Volume
+        - Sales_Classification
+      exact_match: true
+
+# ============================================================
+# 9. METADATA-ONLY / OBSERVABILITY CHECKS
+# ============================================================
+
+- name: show_null_profile
+  criticality: warn
+  check:
+    function: show_null_counts
+  user_metadata:
+    category: observability
+    purpose: profiling_only
